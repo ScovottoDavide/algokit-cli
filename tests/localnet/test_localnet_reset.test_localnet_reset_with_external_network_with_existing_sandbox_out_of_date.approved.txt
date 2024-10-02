@@ -1,0 +1,114 @@
+DEBUG: Running 'docker compose version --format json' in '{current_working_directory}'
+DEBUG: docker: {"version": "v2.5.0"}
+DEBUG: Running 'docker version' in '{current_working_directory}'
+DEBUG: docker: STDOUT
+DEBUG: docker: STDERR
+DEBUG: Running 'docker compose ls --format json --filter name=algokit_sandbox*' in '{current_working_directory}'
+DEBUG: docker: [{"Name": "algokit_sandbox", "Status": "running", "ConfigFiles": "test/sandbox/docker-compose.yml"}]
+DEBUG: Running 'docker network inspect algokit_test' in '{app_config}/sandbox'
+docker: STDOUT
+docker: STDERR
+Cleaning up the running AlgoKit LocalNet...
+DEBUG: Running 'docker compose down' in '{app_config}/sandbox'
+DEBUG: docker: STDOUT
+DEBUG: docker: STDERR
+Syncing LocalNet configuration
+DEBUG: Running 'docker image inspect algorand/indexer:latest --format {{range .RepoDigests}}{{println .}}{{end}}' in '{current_working_directory}'
+DEBUG: docker: tag@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+DEBUG: HTTP Request: GET https://registry.hub.docker.com/v2/repositories/algorand/indexer/tags/latest "HTTP/1.1 200 OK"
+DEBUG: Running 'docker image inspect algorand/algod:latest --format {{range .RepoDigests}}{{println .}}{{end}}' in '{current_working_directory}'
+DEBUG: docker: tag@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+DEBUG: HTTP Request: GET https://registry.hub.docker.com/v2/repositories/algorand/algod/tags/latest "HTTP/1.1 200 OK"
+Starting AlgoKit LocalNet now...
+DEBUG: Running 'docker compose up --detach --quiet-pull --wait' in '{app_config}/sandbox'
+docker: STDOUT
+docker: STDERR
+DEBUG: AlgoKit LocalNet started, waiting for health check
+DEBUG: HTTP Request: GET http://localhost:4001/v2/status "HTTP/1.1 200 OK"
+DEBUG: AlgoKit LocalNet health check successful, algod is ready
+Started; execute `algokit explore` to explore LocalNet in a web user interface.
+----
+{app_config}/sandbox/docker-compose.yml:
+----
+name: algokit_sandbox
+networks:
+  algokit_test:
+    external: true
+services:
+  algod:
+    container_name: algokit_sandbox_algod
+    environment:
+      ADMIN_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      GOSSIP_PORT: 10000
+      KMD_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      START_KMD: 1
+      TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    image: algorand/algod:latest
+    init: true
+    networks:
+    - algokit_test
+    ports:
+    - 7833
+    - 9392:9392
+    volumes:
+    - source: ./algod_config.json
+      target: /etc/algorand/config.json
+      type: bind
+    - source: ./algod_network_template.json
+      target: /etc/algorand/template.json
+      type: bind
+    - ./goal_mount:/root/goal_mount
+  conduit:
+    container_name: algokit_sandbox_conduit
+    depends_on:
+    - indexer-db
+    - algod
+    image: algorand/conduit:latest
+    networks:
+    - algokit_test
+    restart: unless-stopped
+    volumes:
+    - source: ./conduit.yml
+      target: /etc/algorand/conduit.yml
+      type: bind
+  indexer:
+    command: daemon --enable-all-parameters
+    container_name: algokit_sandbox_indexer
+    depends_on:
+    - conduit
+    environment:
+      INDEXER_POSTGRES_CONNECTION_STRING: host=indexer-db port=5432 user=algorand
+        password=algorand dbname=indexerdb sslmode=disable
+    image: algorand/indexer:latest
+    networks:
+    - algokit_test
+    restart: unless-stopped
+  indexer-db:
+    container_name: algokit_sandbox_postgres
+    environment:
+      POSTGRES_DB: indexerdb
+      POSTGRES_PASSWORD: algorand
+      POSTGRES_USER: algorand
+    image: postgres:16-alpine
+    networks:
+    - algokit_test
+    ports:
+    - 5443:5432
+    user: postgres
+  proxy:
+    container_name: algokit_sandbox_proxy
+    depends_on:
+    - algod
+    - indexer
+    image: nginx:1.27.0-alpine
+    networks:
+    - algokit_test
+    ports:
+    - 4001:4001
+    - 4002:4002
+    - 8980:8980
+    restart: unless-stopped
+    volumes:
+    - source: ./nginx.conf
+      target: /etc/nginx/nginx.conf
+      type: bind

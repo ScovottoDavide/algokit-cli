@@ -98,6 +98,33 @@ def test_localnet_start_with_name(app_dir_mock: AppDirs, proc_mock: ProcMock) ->
     )
 
 
+@pytest.mark.usefixtures("proc_mock", "_health_success", "_localnet_up_to_date")
+def test_localnet_start_with_external_network(app_dir_mock: AppDirs, proc_mock: ProcMock) -> None:
+    proc_mock.set_output(
+        "docker compose ls --format json --filter name=algokit_sandbox*",
+        [
+            json.dumps(
+                [
+                    {
+                        "Name": "algokit_sandbox",
+                        "Status": "running",
+                        "ConfigFiles": "sandbox/docker-compose.yml",
+                    }
+                ]
+            )
+        ],
+    )
+    result = invoke("localnet start --external-network algokit_test")
+
+    assert result.exit_code == 0
+    verify(
+        get_combined_verify_output(
+            result.output.replace(str(app_dir_mock.app_config_dir), "{app_config}").replace("\\", "/"),
+            "{app_config}/sandbox/docker-compose.yml",
+            (app_dir_mock.app_config_dir / "sandbox" / "docker-compose.yml").read_text(),
+        )
+    )
+
 @pytest.mark.usefixtures("proc_mock", "_localnet_up_to_date", "_mock_proc_with_running_localnet")
 def test_localnet_start_health_failure(app_dir_mock: AppDirs, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_exception(httpx.RemoteProtocolError("No response"), url=ALGOD_HEALTH_URL)

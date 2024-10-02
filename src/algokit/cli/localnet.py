@@ -157,7 +157,14 @@ localnet_group.add_command(config_command)
     default=False,
     help="Ignore the prompt to stop the LocalNet if it's already running.",
 )
-def start_localnet(*, name: str | None, config_path: Path | None, algod_dev_mode: bool, force: bool) -> None:
+@click.option(
+    "external_network",
+    "--external-network",
+    "-E",
+    default=None,
+    help="Deploy LocalNet to an already existing external docker network",
+)
+def start_localnet(*, name: str | None, config_path: Path | None, algod_dev_mode: bool, force: bool, external_network: str | None) -> None:
     sandbox = ComposeSandbox.from_environment()
     full_name = f"{SANDBOX_BASE_NAME}_{name}" if name is not None else SANDBOX_BASE_NAME
     if sandbox is not None and full_name != sandbox.name:
@@ -166,7 +173,10 @@ def start_localnet(*, name: str | None, config_path: Path | None, algod_dev_mode
             sandbox.stop()
         else:
             raise click.ClickException("LocalNet is already running. Please stop it first")
-    sandbox = ComposeSandbox(SANDBOX_BASE_NAME, config_path) if name is None else ComposeSandbox(name, config_path)
+    sandbox = ComposeSandbox(SANDBOX_BASE_NAME, config_path, external_network) if name is None else ComposeSandbox(name, config_path, external_network)
+    if external_network:
+        if not sandbox.check_external_network_exists(external_network):
+            raise click.ClickException("LocalNet could not be started. External network does not exist")
     compose_file_status = sandbox.compose_file_status()
     sandbox.check_docker_compose_for_new_image_versions()
     if compose_file_status is ComposeFileStatus.MISSING:
@@ -181,6 +191,8 @@ def start_localnet(*, name: str | None, config_path: Path | None, algod_dev_mode
     elif compose_file_status is ComposeFileStatus.UP_TO_DATE:
         logger.debug("LocalNet compose file does not require updating")
     elif compose_file_status is ComposeFileStatus.OUT_OF_DATE and name is None:
+        if external_network:
+            sandbox.write_compose_file()
         logger.warning("LocalNet definition is out of date; please run `algokit localnet reset`")
     if name is not None:
         logger.info(
@@ -227,10 +239,20 @@ def stop_localnet() -> None:
     required=False,
     help="Specify the custom localnet configuration directory.",
 )
-def reset_localnet(*, update: bool, config_path: Path | None) -> None:
-    sandbox = ComposeSandbox.from_environment()
+@click.option(
+    "external_network",
+    "--external-network",
+    "-E",
+    default=None,
+    help="Deploy LocalNet to an already existing external docker network",
+)
+def reset_localnet(*, update: bool, config_path: Path | None, external_network: str | None) -> None:
+    sandbox = ComposeSandbox.from_environment(external_network) if external_network else ComposeSandbox.from_environment()
     if sandbox is None:
-        sandbox = ComposeSandbox(config_path=config_path)
+        sandbox = ComposeSandbox(config_path=config_path, external_network=external_network)
+    if external_network:
+        if not sandbox.check_external_network_exists(external_network):
+            raise click.ClickException("LocalNet configuration has not been reset")
     compose_file_status = sandbox.compose_file_status()
     if compose_file_status is ComposeFileStatus.MISSING:
         logger.debug("Existing LocalNet not found; creating from scratch...")
@@ -345,3 +367,6 @@ def localnet_logs(ctx: click.Context, *, follow: bool, tail: str) -> None:
 
 
 localnet_group.add_command(codespace_command)
+
+if __name__ == '__main__':
+    reset_localnet(['--external-network', 'test'])
