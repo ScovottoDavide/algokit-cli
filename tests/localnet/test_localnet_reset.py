@@ -1,7 +1,8 @@
 import json
 
 import pytest
-from algokit.core.sandbox import get_algod_network_template, get_config_json, get_docker_compose_yml, get_proxy_config
+from algokit.core.sandbox import get_algod_network_template, get_config_json, get_docker_compose_yml, get_proxy_config, \
+    add_external_network_to_docker_compose
 
 from tests import get_combined_verify_output
 from tests.utils.app_dir_mock import AppDirs
@@ -13,6 +14,60 @@ from tests.utils.proc_mock import ProcMock
 @pytest.mark.usefixtures("proc_mock", "_health_success", "_mock_proc_with_running_localnet")
 def test_localnet_reset_without_existing_sandbox(app_dir_mock: AppDirs) -> None:
     result = invoke("localnet reset")
+
+    assert result.exit_code == 0
+    verify(
+        get_combined_verify_output(
+            result.output.replace(str(app_dir_mock.app_config_dir), "{app_config}").replace("\\", "/"),
+            "{app_config}/sandbox/docker-compose.yml",
+            (app_dir_mock.app_config_dir / "sandbox" / "docker-compose.yml").read_text(),
+        )
+    )
+
+
+@pytest.mark.usefixtures("proc_mock", "_health_success", "_mock_proc_with_running_localnet")
+def test_localnet_reset_with_external_network_without_existing_sandbox(app_dir_mock: AppDirs) -> None:
+    result = invoke("localnet reset --external-network algokit_test")
+
+    assert result.exit_code == 0
+    verify(
+        get_combined_verify_output(
+            result.output.replace(str(app_dir_mock.app_config_dir), "{app_config}").replace("\\", "/"),
+            "{app_config}/sandbox/docker-compose.yml",
+            (app_dir_mock.app_config_dir / "sandbox" / "docker-compose.yml").read_text(),
+        )
+    )
+
+
+@pytest.mark.usefixtures("proc_mock", "_health_success", "_localnet_up_to_date", "_mock_proc_with_running_localnet")
+def test_localnet_reset_with_external_network_with_existing_sandbox_out_of_date(app_dir_mock: AppDirs) -> None:
+    (app_dir_mock.app_config_dir / "sandbox").mkdir()
+    (app_dir_mock.app_config_dir / "sandbox" / "docker-compose.yml").write_text("out of date config")
+    (app_dir_mock.app_config_dir / "sandbox" / "algod_config.json").write_text("out of date config")
+
+    result = invoke("localnet reset --external-network algokit_test")
+
+    assert result.exit_code == 0
+    verify(
+        get_combined_verify_output(
+            result.output.replace(str(app_dir_mock.app_config_dir), "{app_config}").replace("\\", "/"),
+            "{app_config}/sandbox/docker-compose.yml",
+            (app_dir_mock.app_config_dir / "sandbox" / "docker-compose.yml").read_text(),
+        )
+    )
+
+
+@pytest.mark.usefixtures("proc_mock", "_health_success", "_localnet_up_to_date", "_mock_proc_with_running_localnet")
+def test_localnet_reset_with_external_network_with_existing_sandbox_up_to_date(app_dir_mock: AppDirs) -> None:
+    external_network = 'algokit_test'
+    (app_dir_mock.app_config_dir / "sandbox").mkdir()
+    docker_compose_yaml = add_external_network_to_docker_compose(get_docker_compose_yml(), external_network)
+    (app_dir_mock.app_config_dir / "sandbox" / "docker-compose.yml").write_text(docker_compose_yaml)
+    (app_dir_mock.app_config_dir / "sandbox" / "algod_config.json").write_text(get_config_json())
+    (app_dir_mock.app_config_dir / "sandbox" / "algod_network_template.json").write_text(get_algod_network_template())
+    (app_dir_mock.app_config_dir / "sandbox" / "nginx.conf").write_text(get_proxy_config())
+
+    result = invoke(f"localnet reset --external-network {external_network}")
 
     assert result.exit_code == 0
     verify(

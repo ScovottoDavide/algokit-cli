@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import httpx
+import yaml
 
 from algokit.core.conf import get_app_config_dir
 from algokit.core.config_commands.container_engine import get_container_engine
@@ -46,7 +47,7 @@ def get_min_compose_version() -> str:
 
 
 class ComposeSandbox:
-    def __init__(self, name: str = SANDBOX_BASE_NAME, config_path: Path | None = None) -> None:
+    def __init__(self, name: str = SANDBOX_BASE_NAME, config_path: Path | None = None, external_network: str | None = None) -> None:
         self.name = SANDBOX_BASE_NAME if name == SANDBOX_BASE_NAME else f"{SANDBOX_BASE_NAME}_{name}"
         self.directory = (config_path or get_app_config_dir()) / self.name
         if not self.directory.exists():
@@ -57,6 +58,9 @@ class ComposeSandbox:
         self._latest_config_json = get_config_json()
         self._latest_algod_network_template = get_algod_network_template()
         self._latest_proxy_config = get_proxy_config()
+        if external_network:
+            self.external_network = external_network
+            self._latest_yaml = add_external_network_to_docker_compose(self._latest_yaml, external_network)
 
     @property
     def compose_file_path(self) -> Path:
@@ -79,7 +83,7 @@ class ComposeSandbox:
         return self.directory / "nginx.conf"
 
     @classmethod
-    def from_environment(cls) -> ComposeSandbox | None:
+    def from_environment(cls, external_network: str | None = None) -> ComposeSandbox | None:
         try:
             run_results = run(
                 [get_container_engine(), "compose", "ls", "--format", "json", "--filter", "name=algokit_sandbox*"],
@@ -97,7 +101,7 @@ class ComposeSandbox:
                 return None
 
             data = json.loads(json_lines[0])
-            return cls._create_instance_from_data(data)
+            return cls._create_instance_from_data(data, external_network)
         except (json.JSONDecodeError, KeyError, IndexError) as err:
             logger.info(f"Error checking config file: {err}", exc_info=True)
             return None
@@ -116,7 +120,7 @@ class ComposeSandbox:
         return valid_json_lines
 
     @classmethod
-    def _create_instance_from_data(cls, data: list[dict[str, Any]]) -> ComposeSandbox | None:
+    def _create_instance_from_data(cls, data: list[dict[str, Any]], external_network: str | None = None) -> ComposeSandbox | None:
         for item in data:
             config_file = item.get("ConfigFiles", "").split(",")[0]
             full_name = Path(config_file).parent.name
@@ -125,7 +129,7 @@ class ComposeSandbox:
                 if full_name.startswith(f"{SANDBOX_BASE_NAME}_")
                 else full_name
             )
-            return cls(name)
+            return cls(name, external_network=external_network)
         return None
 
     def set_algod_dev_mode(self, *, dev_mode: bool) -> None:
@@ -188,6 +192,19 @@ class ComposeSandbox:
     ) -> RunResult:
         return run(
             [get_container_engine(), "compose", *compose_args.split()],
+            cwd=self.directory,
+            stdout_log_level=stdout_log_level,
+            bad_return_code_error_message=bad_return_code_error_message,
+        )
+
+    def _run_docker_command(
+        self,
+        docker_args: str,
+        stdout_log_level: int = logging.INFO,
+        bad_return_code_error_message: str | None = None,
+    ) -> RunResult:
+        return run(
+            [get_container_engine(), *docker_args.split()],
             cwd=self.directory,
             stdout_log_level=stdout_log_level,
             bad_return_code_error_message=bad_return_code_error_message,
@@ -295,6 +312,18 @@ class ComposeSandbox:
                 "algod has a new version available, run `algokit localnet reset --update` to get the latest version"
             )
 
+    def check_external_network_exists(self, external_network: str | None) -> bool:
+        try:
+            if not external_network:
+                return False
+            res = self._run_docker_command(f"network inspect {external_network}",
+                                     bad_return_code_error_message="External network does not exists")
+            if res.exit_code != 0:
+                return False
+            return True
+        except Exception as err:
+            logger.debug(f"Error getting docker external network: {err}", exc_info=True)
+            return False
 
 DEFAULT_ALGOD_SERVER = "http://localhost"
 DEFAULT_INDEXER_SERVER = "http://localhost"
@@ -601,6 +630,12 @@ services:
       - indexer
 """  # noqa: E501
 
+def add_external_network_to_docker_compose(compose_yaml: str, external_network: str) -> str:
+    compose_yaml_dict = yaml.safe_load(compose_yaml)
+    for service in compose_yaml_dict.get('services'):
+        compose_yaml_dict['services'][service]['networks'] = [external_network]
+    compose_yaml_dict.update({'networks': {external_network: {'external': True}}})
+    return yaml.safe_dump(compose_yaml_dict)
 
 def fetch_algod_status_data(service_info: dict[str, Any]) -> dict[str, Any]:
     results: dict[str, Any] = {}
